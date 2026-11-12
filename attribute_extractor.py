@@ -2,244 +2,405 @@
 import re
 
 
-# 1. Attribute Mapping
-ALIASES = {
-    "medicine_name": ["medicine name", "brand name"],
-    "batch_no": ["batch no", "batch number", "batch"],
-    "manufacturing_date": [
-        "mfg date", "mfa date", "manufacturing date",
-        "manufacture date", "mfd"
-    ],
-    "expiry_date": [
-        "expiry date", "expiry", "exp date", "use before"
-    ],
-    "mrp": ["mrp", "maximum retail price"],
-    "generic_name": ["generic name"],
-    "composition": ["composition", "ingredients"],
-    "strength": ["strength"],
-    "manufacturer": ["manufacturer", "manufactured by"],
-    "storage_instructions": ["storage"]
-}
+MONTHS = (
+    r"JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|"
+    r"MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|"
+    r"SEP(?:T(?:EMBER)?)?|OCT(?:OBER)?|"
+    r"NOV(?:EMBER)?|DEC(?:EMBER)?"
+)
+
+UNITS = r"mg|mcg|g|ml|iu"
 
 
-# 2. Clean Label
-def clean_label(label):
-    return re.sub(
-        r"[^a-z0-9]+", " ", str(label).lower()
-    ).strip()
-
-
-# 3. Normalize Attribute
-def normalize_attribute(label):
-
-    key = clean_label(label)
-
-    for standard, aliases in ALIASES.items():
-
-        if key == standard.replace("_", " "):
-            return standard
-
-        for alias in aliases:
-            if key == clean_label(alias):
-                return standard
-
-    return re.sub(r"\s+", "_", key)
-
-
-# 4. Clean Extracted Text
 def clean_value(value):
-
     value = re.sub(r"\s+", " ", value)
-    value = re.sub(r"[|~=©]+", "", value)
-
-    return value.strip(" -_.,;")
+    return value.strip(" -_.,;:=|")
 
 
-# 5. Extract Medicine Details
-def extract_medicine_details(text):
+def normalize_text(text):
+    text = text.replace("\u00a0", " ")
+    text = re.sub(r"[–—]", "-", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text
 
-    medicine = {}
 
-    if not text:
-        return medicine
+# 1. Medicine name
 
-    # Medicine Name
+
+
+
+def extract_medicine_name(text):
+
+    # Pattern 1: Brand name at the beginning
     match = re.search(
-        r"\b(Parafast|Azithro)\W*\s*500\b",
+        r"^\s*([A-Za-z][A-Za-z0-9-]*)"
+        r"[®©°*.\s-]*(\d{2,4})\b",
         text,
         re.IGNORECASE
     )
 
     if match:
-        medicine["medicine_name"] = (
-            match.group(1).title() + " 500"
-        )
+        return match.group(1) + " " + match.group(2)
 
-    # Batch Number
+    # Pattern 2: Brand followed by Tablets
     match = re.search(
-        r"Batch\s*(?:No\.?|Number)?\s*[:.]?\s*([A-Z0-9-]{5,})",
+        r"['‘\"]?([A-Za-z][A-Za-z0-9-]*)"
+        r"['’\"]?\s*[®©°*.-]*\s*(\d{2,4})"
+        r"\s*(?=Tablets?\b)",
         text,
         re.IGNORECASE
     )
 
     if match:
-        medicine["batch_no"] = match.group(1).upper()
+        return match.group(1) + " " + match.group(2)
 
-    # Date Pattern
-    date_pattern = (
-        r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|"
-        r"SEP|OCT|NOV|DEC)\.?\s*(20\d{2})\b"
-    )
-
-    # Manufacturing Date
-    mfg_section = re.search(
-        r"M(?:fg|fa)\.?\s*Date(.*?)(?:Expiry\s*Date|$)",
-        text,
-        re.IGNORECASE | re.DOTALL
-    )
-
-    if mfg_section:
-
-        date_match = re.search(
-            date_pattern,
-            mfg_section.group(1),
-            re.IGNORECASE
-        )
-
-        if date_match:
-            medicine["manufacturing_date"] = (
-                date_match.group(1).upper()
-                + " "
-                + date_match.group(2)
-            )
-
-    # Expiry Date
-    expiry_section = re.search(
-        r"Expiry\s*Date(.*?)(?:M\s*\.?\s*R\s*\.?\s*P|$)",
-        text,
-        re.IGNORECASE | re.DOTALL
-    )
-
-    if expiry_section:
-
-        date_match = re.search(
-            date_pattern,
-            expiry_section.group(1),
-            re.IGNORECASE
-        )
-
-        if date_match:
-            medicine["expiry_date"] = (
-                date_match.group(1).upper()
-                + " "
-                + date_match.group(2)
-            )
-
-    # MRP
+    # Pattern 3: Brand after strength
     match = re.search(
-        r"M\s*\.?\s*R\s*\.?\s*P\s*\.?"
-        r"[^0-9]{0,20}(\d+(?:\.\d{1,2})?)",
+        r"\b\d+(?:\.\d+)?\s*mg\s+"
+        r"([A-Za-z][A-Za-z0-9®*.-]*)"
+        r"\s*[®©°*.-]*\s*(\d{2,4})",
         text,
         re.IGNORECASE
     )
 
     if match:
-        medicine["mrp"] = float(match.group(1))
+        return match.group(1) + " " + match.group(2)
 
-    # Generic Name
+    # Pattern 4: Brand name on a separate line
     match = re.search(
-        r"Equivalent\s+to\s+([A-Za-z]+)",
+        r"^\s*([A-Za-z][A-Za-z0-9-]*)\s+(\d{2,4})\s*$",
+        text,
+        re.MULTILINE
+    )
+
+    if match:
+        return match.group(1) + " " + match.group(2)
+
+    return None
+
+
+
+# 2. Batch number
+
+def extract_batch(text):
+
+    match = re.search(
+        r"\b(?:Batch\s*(?:No\.?|Number)?|B\s*\.?\s*No\.?)"
+        r"\s*[:=\-]?\s*([A-Z0-9][A-Z0-9/-]{3,})",
         text,
         re.IGNORECASE
     )
 
-    if match:
-        medicine["generic_name"] = match.group(1).title()
+    return match.group(1).upper() if match else None
 
-    elif re.search(r"\bParacetamol\b", text, re.IGNORECASE):
-        medicine["generic_name"] = "Paracetamol"
 
-    elif re.search(r"\bAzithromycin\b", text, re.IGNORECASE):
-        medicine["generic_name"] = "Azithromycin"
+# 3. Manufacturing and expiry dates
 
-    # Composition
-    match = re.search(
-        r"(Paracetamol|Azithromycin)"
-        r"(?:\s+Dihydrate)?\s+IP\s*500\s*mg",
-        text,
-        re.IGNORECASE
-    )
 
-    if match:
-        medicine["composition"] = clean_value(
-            match.group(0)
-        )
-
+def extract_date(text, date_type):
+    if date_type == "manufacturing":
+        label = (
+            r"\b(?:Mfg|Mfa|Mfd|Mfgd|Mig|"
+            r"Manufacturing|Manufacture)"
+            r"\s*\.?\s*Date\b")
     else:
-        # Handle OCR line breaks in Azithromycin composition
+        label = r"\b(?:Expiry|Exp|EXP)\s*\.?\s*Date?\b"
+
+
+    date_pattern = rf"\b({MONTHS})\.?\s*[-:/]?\s*(20\d{{2}})\b"
+
+    label_match = re.search(label, text, re.IGNORECASE)
+
+    if not label_match:
+        return None
+
+    # First check after the date label
+    after = text[label_match.end():label_match.end() + 100]
+
+    date_match = re.search(
+        date_pattern,
+        after,
+        re.IGNORECASE
+    )
+
+    if date_match:
+        return (
+            date_match.group(1).upper()
+            + " "
+            + date_match.group(2)
+        )
+
+    # If OCR has placed the date before its label,
+    # check the nearby text before the label.
+    if date_type == "manufacturing":
+        before = text[max(0, label_match.start() - 100):label_match.start()]
+
+        dates = list(re.finditer(
+            date_pattern,
+            before,
+            re.IGNORECASE
+        ))
+
+        if dates:
+            date_match = dates[-1]
+            return (
+                date_match.group(1).upper()
+                + " "
+                + date_match.group(2)
+            )
+
+    return None
+
+
+
+# 4. MRP
+
+def extract_mrp(text):
+
+    patterns = [
+        (
+            r"\bM\s*\.?\s*R\s*\.?\s*P\s*\.?\s*"
+            r"[^0-9]{0,30}"
+            r"(\d{1,6}(?:\.\d{1,2})?)"
+        )
+    ]
+
+    for pattern in patterns:
         match = re.search(
-            r"(Azithromycin\s+Dihydrate)\s+IP"
-            r"[\s\S]{0,80}?500\s*mg",
+            pattern,
             text,
             re.IGNORECASE
         )
 
         if match:
-            medicine["composition"] = (
-                "Azithromycin Dihydrate IP 500 mg"
-            )
+            return float(match.group(1))
 
-    # Strength
+    return None
+
+
+
+# 5. Strength
+
+def extract_strength(text):
+
+    matches = re.findall(
+        rf"\b\d+(?:\.\d+)?\s*(?:{UNITS})\b",
+        text,
+        re.IGNORECASE
+    )
+
+    values = []
+
+    for value in matches:
+        value = re.sub(r"\s+", "", value.lower())
+
+        if value not in values:
+            values.append(value)
+
+    return " + ".join(values) if values else None
+
+
+# 6. Composition
+
+
+
+
+def extract_composition(text):
+
+    patterns = [
+        # Pattern 1: Each tablet contains
+        (
+            r"\b(?:Each|E?ach)\s+"
+            r"(?:(?:film\s+)?coated\s+|uncoated\s+)?"
+            r"tablets?\s+contains\s*:?\s*"
+            r"([\s\S]{1,350}?)"
+            r"(?=\b(?:Batch|Dosage|Storage|"
+            r"Mfg|Mig|Expiry|MRP)\b|$)"
+        ),
+
+        # Pattern 2: Composition label
+        (
+            r"\bComposition\s*:?\s*"
+            r"([\s\S]{1,350}?)"
+            r"(?=\b(?:Batch|Dosage|Storage|"
+            r"Mfg|Mig|Expiry|MRP)\b|$)"
+        ),
+
+        # Pattern 3: Composition directly written in text
+        # Pattern 3: Composition directly written in text
+        (
+            r"\b([A-Za-z]+\s+\d+(?:\.\d+)?\s*mg)"
+            r"\s*\+\s*Tablets?\s*"
+            r"([A-Za-z]+\s+\d+(?:\.\d+)?\s*mg)"
+        )
+
+    ]
+
+    section = ""
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
+        if match:
+            section = (
+                match.group(1) + " + " + match.group(2)
+                if match.lastindex == 2
+                else match.group(1)
+                )
+            break
+
+    # Remove text after Equivalent to or Excipients
+    section = re.split(
+        r"\b(?:Equivalent\s+to|Excipients?|EXCIPIONES)\b",
+        section,
+        maxsplit=1,
+        flags=re.IGNORECASE
+    )[0]
+
+    section = re.sub(r"\.{2,}", " ", section)
+
+    section = re.sub(
+        r"\b(?:Each|film|coated|uncoated|tablet|tablets|contains)\b",
+        "",
+        section,
+        flags=re.IGNORECASE
+    )
+
+    section = re.sub(
+        r"\b(?:IP|Be|ee)\b",
+        "",
+        section,
+        flags=re.IGNORECASE
+    )
+
+    section = re.sub(r"[~_=]+", " ", section)
+
+    section = clean_value(section)
+
+    return section if re.search(r"[A-Za-z]", section) else None
+
+# 7. Manufacturer
+
+def extract_manufacturer(text):
+
+    known_companies = [
+        r"SunPharma\s+Laboratories\s+Ltd\.?",
+        r"Alkem\s+Laboratories\s+Ltd\.?",
+        r"Cipla\s+Ltd\.?"
+    ]
+
+    for pattern in known_companies:
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
+        if match:
+            return clean_value(match.group())
+
     match = re.search(
-        r"\b500\s*mg\b",
+        r"Manufactured\s+by\s*[:= -]*"
+        r"([\s\S]{0,100}?)"
+        r"(?=\b(?:Expiry|Mfg|MRP|Batch|Store|Storage)\b|$)",
         text,
         re.IGNORECASE
     )
 
     if match:
-        medicine["strength"] = "500mg"
+        return clean_value(match.group(1))
 
-    # Manufacturer
-    if re.search(r"Cipla\s+Ltd", text, re.IGNORECASE):
-        medicine["manufacturer"] = "Cipla Ltd."
+    return None
 
-    elif re.search(
-        r"Sun\s*Pharma\s+Laboratories\s+Ltd",
+
+# 8. Storage instructions
+
+
+def extract_storage(text):
+
+    match = re.search(
+        r"\bStorage\s*:\s*"
+        r"(.*?)"
+        r"(?=\b(?:Dosage|Warning|Batch\s*No|"
+        r"Mfg|Mig|Mfa|Mfd|Expiry|MRP|"
+        r"Keep\s+out\s+of\s+reach|Manufactured\s+by)\b|$)",
         text,
         re.IGNORECASE
-    ):
-        medicine["manufacturer"] = (
-            "Sun Pharma Laboratories Ltd."
-        )
+    )
 
-    # Storage Instructions
-    if re.search(r"Store in a cool", text, re.IGNORECASE):
+    if not match:
+        return None
 
-        medicine["storage_instructions"] = (
-            "Store in a cool, dry & dark place."
-        )
+    section = match.group(1)
 
-    elif re.search(r"Store Pelow 25", text, re.IGNORECASE):
+    # Remove manufacturer names
+    section = re.sub(
+        r"\b(?:SunPharma\s+Laboratories\s+Ltd\.?|"
+        r"Alkem\s+Laboratories\s+Ltd\.?|"
+        r"Cipla\s+Ltd\.?)\b",
+        " ",
+        section,
+        flags=re.IGNORECASE
+    )
 
-        medicine["storage_instructions"] = (
-            "Store below 25°C in a dry place."
-        )
+    # Remove address after company details
+    section = re.split(
+        r"\b(?:Plot\s+No\.?|Industrial\s+Area|"
+        r"B-\d+|N-\d+|Sector-\d+)\b",
+        section,
+        maxsplit=1,
+        flags=re.IGNORECASE
+    )[0]
 
-    return medicine
+    section = re.sub(
+        r"\b(?:aS|SS|ee)\b",
+        " ",
+        section,
+        flags=re.IGNORECASE
+    )
+
+    section = clean_value(section)
+
+    # Avoid repeated Store
+    section = re.sub(
+        r"^(?:Store\s+)+",
+        "Store ",
+        section,
+        flags=re.IGNORECASE
+    )
+
+    return section if section else None
 
 
-# 6. Extract All Attributes
+# 9. Extract all medicine attributes
+
+def extract_medicine_details(text):
+
+    text = normalize_text(text)
+
+    return {
+        "medicine_name": extract_medicine_name(text),
+        "batch_no": extract_batch(text),
+        "manufacturing_date": extract_date(text, "manufacturing"),
+        "expiry_date": extract_date(text, "expiry"),
+        "mrp": extract_mrp(text),
+        "strength": extract_strength(text),
+        "composition": extract_composition(text),
+        "manufacturer": extract_manufacturer(text),
+        "storage_instructions": extract_storage(text)
+    }
+
+
+# 10. Separate fixed and additional attributes
+
 def extract_attributes(text):
-
-    if not text:
-        return {
-            "fixed_attributes": {},
-            "additional_attributes": {}
-        }
 
     medicine = extract_medicine_details(text)
 
-    # Fixed Database Fields
     fixed_fields = [
         "medicine_name",
         "batch_no",
@@ -249,15 +410,14 @@ def extract_attributes(text):
     ]
 
     fixed_attributes = {
-        field: medicine.get(field)
-        for field in fixed_fields
+        key: medicine.get(key)
+        for key in fixed_fields
     }
 
-    # Dynamic Attributes
     additional_attributes = {
         key: value
         for key, value in medicine.items()
-        if key not in fixed_fields
+        if key not in fixed_fields and value is not None
     }
 
     return {

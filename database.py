@@ -1,13 +1,14 @@
 
 import mysql.connector
-import json
 import os
 
+from dynamic_schema import ensure_dynamic_columns
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# MySQL Database Connection
+
+# 1. MySQL Database Connection
 def create_connection():
 
     try:
@@ -16,7 +17,6 @@ def create_connection():
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD"),
             database=os.getenv("DB_NAME")
-
         )
 
         return connection
@@ -26,7 +26,7 @@ def create_connection():
         return None
 
 
-# Insert Medicine Record
+# 2. Insert Medicine Record
 def insert_record(medicine_data):
 
     connection = create_connection()
@@ -34,47 +34,69 @@ def insert_record(medicine_data):
     if connection is None:
         return
 
+    cursor = None
+
     try:
         cursor = connection.cursor()
 
         fixed = medicine_data["fixed_attributes"]
         additional = medicine_data["additional_attributes"]
 
-        query = """
-            INSERT INTO medicines (
-                medicine_name,
-                batch_no,
-                manufacturing_date,
-                expiry_date,
-                mrp,
-                additional_attributes
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-
-        values = (
-            fixed.get("medicine_name"),
-            fixed.get("batch_no"),
-            fixed.get("manufacturing_date"),
-            fixed.get("expiry_date"),
-            fixed.get("mrp"),
-            json.dumps(additional)
+        # Create missing dynamic columns
+        dynamic_data = ensure_dynamic_columns(
+            cursor,
+            additional
         )
 
-        cursor.execute(query, values)
+        # Fixed attributes
+        insert_data = {
+            "medicine_name": fixed.get("medicine_name"),
+            "batch_no": fixed.get("batch_no"),
+            "manufacturing_date": fixed.get("manufacturing_date"),
+            "expiry_date": fixed.get("expiry_date"),
+            "mrp": fixed.get("mrp")
+        }
+
+        # Add dynamic attributes
+        insert_data.update(dynamic_data)
+
+        columns = list(insert_data.keys())
+
+        column_names = ", ".join(
+            f"`{column}`" for column in columns
+        )
+
+        placeholders = ", ".join(
+            ["%s"] * len(columns)
+        )
+
+        query = f"""
+            INSERT INTO medicines ({column_names})
+            VALUES ({placeholders})
+        """
+
+        cursor.execute(
+            query,
+            tuple(insert_data.values())
+        )
+
         connection.commit()
 
         print("\nMedicine record inserted successfully!")
+        print("Fixed and dynamic attributes saved separately.")
 
-    except mysql.connector.Error as error:
+    except Exception as error:
+        connection.rollback()
         print("\nData Insertion Error:", error)
 
     finally:
-        cursor.close()
+        if cursor:
+            cursor.close()
+
         connection.close()
 
 
-# Display Medicine Database Records
+# 3. Display Medicine Database Records
 def display_database_records():
 
     connection = create_connection()
@@ -82,55 +104,51 @@ def display_database_records():
     if connection is None:
         return
 
+    cursor = None
+
     try:
         cursor = connection.cursor()
 
-        query = """
-            SELECT
-                medicine_id,
-                medicine_name,
-                batch_no,
-                manufacturing_date,
-                expiry_date,
-                mrp,
-                additional_attributes
-            FROM medicines
-        """
+        cursor.execute("SHOW COLUMNS FROM medicines")
 
-        cursor.execute(query)
+        all_columns = [
+            row[0] for row in cursor.fetchall()
+        ]
+
+        display_columns = [
+            column for column in all_columns
+            if column.lower() != "additional_attributes"
+        ]
+
+        column_query = ", ".join(
+            f"`{column}`" for column in display_columns
+        )
+
+        cursor.execute(
+            f"SELECT {column_query} FROM medicines"
+        )
 
         records = cursor.fetchall()
 
         if not records:
-            print("\nNo medicine records found in database!")
+            print("\nNo medicine records found!")
             return
 
-        headers = [
-            "ID",
-            "Medicine Name",
-            "Batch No",
-            "MFG Date",
-            "EXP Date",
-            "MRP",
-            "Additional Attributes"
+        headers = display_columns
+
+        rows = [
+            [
+                "NULL" if value is None else str(value)
+                for value in record
+            ]
+            for record in records
         ]
 
-        rows = []
-
-        for record in records:
-
-            rows.append([
-                str(record[0]),
-                str(record[1] or ""),
-                str(record[2] or ""),
-                str(record[3] or ""),
-                str(record[4] or ""),
-                str(record[5] or ""),
-                str(record[6] or "")
-            ])
-
         column_widths = [
-            max(len(headers[i]), max(len(row[i]) for row in rows))
+            max(
+                len(headers[i]),
+                max(len(row[i]) for row in rows)
+            )
             for i in range(len(headers))
         ]
 
@@ -165,5 +183,7 @@ def display_database_records():
         print("\nDatabase Fetch Error:", error)
 
     finally:
-        cursor.close()
+        if cursor:
+            cursor.close()
+
         connection.close()

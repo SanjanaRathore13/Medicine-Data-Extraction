@@ -2,17 +2,13 @@
 import cv2
 import pytesseract
 
-
-# Tesseract OCR engine path
+# Tesseract OCR path
 pytesseract.pytesseract.tesseract_cmd = (
     r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 )
 
 
 def preprocess_image(image_path):
-    """
-    Preprocess medicine image using OpenCV.
-    """
 
     image = cv2.imread(image_path)
 
@@ -20,10 +16,8 @@ def preprocess_image(image_path):
         print(f"Image could not be loaded: {image_path}")
         return None
 
-    # 1. Convert image into grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # 2. Resize image for better OCR
     gray = cv2.resize(
         gray,
         None,
@@ -32,10 +26,10 @@ def preprocess_image(image_path):
         interpolation=cv2.INTER_CUBIC
     )
 
-    # 3. Remove noise
-    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+    denoised = cv2.bilateralFilter(
+        gray, 9, 75, 75
+    )
 
-    # 4. Apply thresholding
     processed = cv2.threshold(
         denoised,
         0,
@@ -47,9 +41,6 @@ def preprocess_image(image_path):
 
 
 def extract_image_text(image_path):
-    """
-    Extract text from a preprocessed medicine image.
-    """
 
     processed_image = preprocess_image(image_path)
 
@@ -58,17 +49,13 @@ def extract_image_text(image_path):
 
     extracted_text = pytesseract.image_to_string(
         processed_image,
-        lang="eng",
-        config="--oem 3 --psm 6"
+        lang="eng"
     )
 
     return extracted_text
 
 
 def process_medicine_images(image_paths):
-    """
-    Extract OCR text from multiple medicine images.
-    """
 
     all_extracted_data = {}
 

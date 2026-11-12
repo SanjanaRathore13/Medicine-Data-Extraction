@@ -1,51 +1,54 @@
 
-import json
+import re
 
 
-def create_dynamic_schema(additional_attributes):
+def ensure_dynamic_columns(cursor, additional_attributes):
     """
-    Prepare additional medicine attributes
-    in JSON format for database storage.
+    Automatically create missing attribute columns
+    in the existing medicines table.
     """
 
     if not isinstance(additional_attributes, dict):
-        raise TypeError(
-            "Additional attributes must be a dictionary."
-        )
+        raise TypeError("Additional attributes must be a dictionary.")
+
+    # Get existing table columns
+    cursor.execute("SHOW COLUMNS FROM medicines")
+
+    existing_columns = {
+        row[0].lower() for row in cursor.fetchall()
+    }
 
     dynamic_data = {}
 
     for attribute, value in additional_attributes.items():
 
-        if attribute and value is not None:
+        if value is None or not str(attribute).strip():
+            continue
 
-            attribute_name = attribute.strip().lower()
+        # Convert attribute name into a valid SQL column name
+        column_name = re.sub(
+            r"[^a-zA-Z0-9_]",
+            "_",
+            attribute.strip().lower()
+        )
 
-            if attribute_name:
-                dynamic_data[attribute_name] = value
+        if not column_name or not column_name[0].isalpha():
+            continue
+
+        # Create column if it does not already exist
+        if column_name not in existing_columns:
+
+            query = (
+                f"ALTER TABLE medicines "
+                f"ADD COLUMN `{column_name}` TEXT"
+            )
+
+            cursor.execute(query)
+
+            existing_columns.add(column_name)
+
+            print(f"New column created: {column_name}")
+
+        dynamic_data[column_name] = value
 
     return dynamic_data
-
-
-def convert_to_json(dynamic_data):
-    """
-    Convert dynamic attributes into JSON string.
-    """
-
-    json_data = json.dumps(
-        dynamic_data,
-        ensure_ascii=False
-    )
-
-    return json_data
-
-
-def read_dynamic_attributes(json_data):
-    """
-    Convert JSON string back into Python dictionary.
-    """
-
-    if not json_data:
-        return {}
-
-    return json.loads(json_data)
